@@ -27,14 +27,16 @@ fn default_status() -> String {
     "Discharging".to_owned()
 }
 
-pub fn default_config_path() -> PathBuf {
-    dirs::config_dir()
-        .expect("Something wrong with config directory")
-        .join("battery-friend/config.toml")
+pub fn default_config_path() -> Option<PathBuf> {
+    Some(
+        dirs::config_dir()?
+            .join("battery-friend")
+            .join("config.toml"),
+    )
 }
 
-pub fn load(path: &PathBuf) -> Config {
-    println!("reloading config");
-    toml::from_str(&fs::read_to_string(path).expect("Problem reading config"))
-        .expect("Problem parsing config")
+pub fn load(path: &PathBuf) -> Result<Config, Box<dyn std::error::Error>> {
+    let contents = fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read config file at {}: {}", path.display(), e))?;
+    Ok(toml::from_str(&contents).map_err(|e| format!("Failed to parse toml config: {}", e))?)
 }

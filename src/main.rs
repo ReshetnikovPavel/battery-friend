@@ -4,7 +4,14 @@ mod cfg;
 use clap::Parser;
 use notify::{Error, Event, RecommendedWatcher, RecursiveMode, Watcher};
 use notify_rust::{Notification, Urgency};
-use std::{collections::HashMap, path::PathBuf, process, sync::{Arc, RwLock}, thread, time::Duration};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    process,
+    sync::{Arc, RwLock},
+    thread,
+    time::Duration,
+};
 
 fn main() {
     let args = Args::parse();
@@ -18,17 +25,25 @@ fn main() {
     let config_path = args.config;
     let cloned_config_path = config_path.clone();
 
-    let config_rw_lock = Arc::new(RwLock::new(cfg::load(&config_path)));
+    let config = cfg::load(&config_path).expect("Failed to load config");
+    let config_rw_lock = Arc::new(RwLock::new(config));
     let cloned_config_rw_lock = config_rw_lock.clone();
 
     let mut watcher = RecommendedWatcher::new(
         move |result: Result<Event, Error>| {
             let event = result.unwrap();
             if event.kind.is_modify() {
-                while !cloned_config_path.exists() {
-                    thread::sleep(Duration::from_millis(10));
+                for _ in 0..10 {
+                    match cfg::load(&cloned_config_path) {
+                        Ok(config) => {
+                            *cloned_config_rw_lock.write().unwrap() = config;
+                            eprintln!("Config reloaded successfully");
+                            return;
+                        }
+                        Err(_) => thread::sleep(Duration::from_millis(10)),
+                    }
                 }
-                *cloned_config_rw_lock.write().unwrap() = cfg::load(&cloned_config_path);
+                eprintln!("Failed to reload config");
             }
         },
         notify::Config::default(),
@@ -47,8 +62,8 @@ fn run(config_rw_lock: Arc<RwLock<cfg::Config>>) {
     loop {
         let config = config_rw_lock.read().unwrap();
         let duration = parse_duration::parse(&config.poll_period).expect("Wrong duration");
-        let percent = battery::percentage();
-        for message in filter_messages(&config.messages, percent, battery::status()) {
+        let percent = battery::percentage().unwrap();
+        for message in filter_messages(&config.messages, percent, battery::status().unwrap()) {
             let mut notification = build_notification(message, percent);
             if let Some(id) = id {
                 notification.id(id);
@@ -64,7 +79,7 @@ fn run(config_rw_lock: Arc<RwLock<cfg::Config>>) {
 #[derive(Parser, Debug)]
 #[command[version, about, long_about = None]]
 struct Args {
-    #[arg(short, long, default_value = cfg::default_config_path().into_os_string())]
+    #[arg(short, long, default_value = cfg::default_config_path().expect("Failed to assign default config path").into_os_string())]
     config: PathBuf,
 }
 
