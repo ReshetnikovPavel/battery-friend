@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::PathBuf};
+use std::{collections::HashMap, fs, path::PathBuf};
 
 #[derive(serde::Deserialize, Debug)]
 pub struct Config {
@@ -31,4 +31,10 @@ pub fn default_config_path() -> PathBuf {
     dirs::config_dir()
         .expect("Something wrong with config directory")
         .join("battery-friend/config.toml")
+}
+
+pub fn load(path: &PathBuf) -> Config {
+    println!("reloading config");
+    toml::from_str(&fs::read_to_string(path).expect("Problem reading config"))
+        .expect("Problem parsing config")
 }

@@ -2,8 +2,9 @@ mod battery;
 mod cfg;
 
 use clap::Parser;
+use notify::{Error, Event, RecommendedWatcher, RecursiveMode, Watcher};
 use notify_rust::{Notification, Urgency};
-use std::{collections::HashMap, fs, path::PathBuf, process, thread};
+use std::{collections::HashMap, path::PathBuf, process, sync::{Arc, RwLock}, thread, time::Duration};
 
 fn main() {
     let args = Args::parse();
@@ -14,14 +15,38 @@ fn main() {
         );
         process::exit(1);
     }
+    let config_path = args.config;
+    let cloned_config_path = config_path.clone();
 
-    let config: cfg::Config =
-        toml::from_str(&fs::read_to_string(&args.config).expect("Problem reading config"))
-            .expect("Problem parsing config");
-    let duration = parse_duration::parse(&config.poll_period).expect("Wrong duration");
+    let config_rw_lock = Arc::new(RwLock::new(cfg::load(&config_path)));
+    let cloned_config_rw_lock = config_rw_lock.clone();
 
+    let mut watcher = RecommendedWatcher::new(
+        move |result: Result<Event, Error>| {
+            let event = result.unwrap();
+            if event.kind.is_modify() {
+                while !cloned_config_path.exists() {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                *cloned_config_rw_lock.write().unwrap() = cfg::load(&cloned_config_path);
+            }
+        },
+        notify::Config::default(),
+    )
+    .unwrap();
+
+    watcher
+        .watch(&config_path.parent().unwrap(), RecursiveMode::NonRecursive)
+        .unwrap();
+
+    run(config_rw_lock);
+}
+
+fn run(config_rw_lock: Arc<RwLock<cfg::Config>>) {
     let mut id = None;
     loop {
+        let config = config_rw_lock.read().unwrap();
+        let duration = parse_duration::parse(&config.poll_period).expect("Wrong duration");
         let percent = battery::percentage();
         for message in filter_messages(&config.messages, percent, battery::status()) {
             let mut notification = build_notification(message, percent);
@@ -31,6 +56,7 @@ fn main() {
             let handle = notification.show().expect("Problem showing notification");
             id = Some(handle.id());
         }
+        drop(config);
         thread::sleep(duration)
     }
 }
