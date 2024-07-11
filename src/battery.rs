@@ -34,6 +34,7 @@ pub enum Status {
     Charging,
     NotCharging,
     Discharging,
+    Full,
 }
 
 impl FromStr for Status {
@@ -44,10 +45,12 @@ impl FromStr for Status {
             "charging" | "Charging" => Ok(Status::Charging),
             "not charging" | "Not charging" => Ok(Status::NotCharging),
             "discharging" | "Discharging" => Ok(Status::Discharging),
+            "full" | "Full" => Ok(Status::Full),
             _ => Err("Battery status is not written correctly. \
                 Possible values are: `charging`, `Charging`, \
                 `not charging`, `Not charging`, \
-                `discharging`, `Discharging`"
+                `discharging`, `Discharging`, \
+                `full` and `Full`"
                 .to_owned()),
         }
     }
