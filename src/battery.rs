@@ -1,32 +1,34 @@
-use std::{fs, str::FromStr};
+use std::{fs, io, str::FromStr};
 
 static BATTERY_STATUS_FILEPATH: &str = "/sys/class/power_supply/BAT0/status";
 static BATTERY_PERCENTAGE_FILEPATH: &str = "/sys/class/power_supply/BAT0/capacity";
 
-pub fn status() -> Result<Status, Box<dyn std::error::Error>> {
-    Ok(fs::read_to_string(BATTERY_STATUS_FILEPATH)
-        .map_err(|e| {
-            format!(
-                "Failed to read battery status file at {}, {}",
-                BATTERY_STATUS_FILEPATH, e
-            )
-        })?
-        .trim()
-        .parse()
-        .map_err(|e| format!("Failed to parse battery status: {}", e))?)
+#[derive(Debug)]
+pub enum StatusError {
+    Read(io::Error),
+    Parse(ParseStatusError),
 }
 
-pub fn percentage() -> Result<i64, Box<dyn std::error::Error>> {
-    Ok(fs::read_to_string(BATTERY_PERCENTAGE_FILEPATH)
-        .map_err(|e| {
-            format!(
-                "Failed to read battery percentage file at {}, {}",
-                BATTERY_PERCENTAGE_FILEPATH, e
-            )
-        })?
+pub fn status() -> Result<Status, StatusError> {
+    Ok(fs::read_to_string(BATTERY_STATUS_FILEPATH)
+        .map_err(|e| StatusError::Read(e))?
         .trim()
         .parse()
-        .map_err(|e| format!("Failed to parse battery percentage: {}", e))?)
+        .map_err(|e| StatusError::Parse(e))?)
+}
+
+#[derive(Debug)]
+pub enum PercentageError {
+    Read(io::Error),
+    Parse(std::num::ParseIntError),
+}
+
+pub fn percentage() -> Result<i64, PercentageError> {
+    Ok(fs::read_to_string(BATTERY_PERCENTAGE_FILEPATH)
+        .map_err(|e| PercentageError::Read(e))?
+        .trim()
+        .parse()
+        .map_err(|e| PercentageError::Parse(e))?)
 }
 
 #[derive(PartialEq)]
@@ -37,8 +39,11 @@ pub enum Status {
     Full,
 }
 
+#[derive(Debug)]
+pub struct ParseStatusError {}
+
 impl FromStr for Status {
-    type Err = String;
+    type Err = ParseStatusError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
@@ -46,12 +51,7 @@ impl FromStr for Status {
             "not charging" | "Not charging" => Ok(Status::NotCharging),
             "discharging" | "Discharging" => Ok(Status::Discharging),
             "full" | "Full" => Ok(Status::Full),
-            _ => Err("Battery status is not written correctly. \
-                Possible values are: `charging`, `Charging`, \
-                `not charging`, `Not charging`, \
-                `discharging`, `Discharging`, \
-                `full` and `Full`"
-                .to_owned()),
+            _ => Err(ParseStatusError{}),
         }
     }
 }

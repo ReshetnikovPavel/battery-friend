@@ -1,13 +1,13 @@
-use std::{collections::HashMap, fs, path::PathBuf};
+use std::{collections::HashMap, fs, io, path::PathBuf, sync::{Arc, PoisonError, RwLock, RwLockWriteGuard}};
 
 #[derive(serde::Deserialize, Debug)]
 pub struct Config {
-    #[serde(default = "default_poll_period")]
-    pub poll_period: String,
+    #[serde(default = "default_poll")]
+    pub poll: String,
     pub messages: HashMap<String, Message>,
 }
 
-fn default_poll_period() -> String {
+pub fn default_poll() -> String {
     "2m".to_owned()
 }
 
@@ -35,8 +35,27 @@ pub fn default_config_path() -> Option<PathBuf> {
     )
 }
 
-pub fn load(path: &PathBuf) -> Result<Config, Box<dyn std::error::Error>> {
-    let contents = fs::read_to_string(path)
-        .map_err(|e| format!("Failed to read config file at {}: {}", path.display(), e))?;
-    Ok(toml::from_str(&contents).map_err(|e| format!("Failed to parse toml config: {}", e))?)
+#[derive(Debug)]
+pub enum LoadError {
+    Read(io::Error),
+    Parse(toml::de::Error),
+}
+
+pub fn load(path: &PathBuf) -> Result<Config, LoadError> {
+    let contents = fs::read_to_string(path).map_err(|e| LoadError::Read(e))?;
+    let config = toml::from_str(&contents).map_err(|e| LoadError::Parse(e))?;
+    Ok(config)
+}
+
+#[derive(Debug)]
+pub enum ReloadError<'a> {
+    Load(LoadError),
+    Poison(PoisonError<RwLockWriteGuard<'a, Config>>)
+}
+
+pub fn reload<'a>(config_path: &PathBuf, config_rw_lock: &'a Arc<RwLock<Config>>) -> Result<(), ReloadError<'a>> {
+    let config = load(&config_path).map_err(|e| ReloadError::Load(e))?;
+    let mut write_lock = config_rw_lock.write().map_err(|e| ReloadError::Poison(e))?;
+    *write_lock = config;
+    Ok(())
 }
