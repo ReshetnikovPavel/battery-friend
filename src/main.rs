@@ -2,6 +2,7 @@ mod battery;
 mod cfg;
 
 use clap::Parser;
+use env_logger::Env;
 use log::{error, info};
 use notify::{Error, Event, RecommendedWatcher, RecursiveMode, Watcher};
 use notify_rust::{Notification, Urgency};
@@ -14,54 +15,80 @@ use std::{
     time::Duration,
 };
 
-fn main() {
-    env_logger::init();
+#[derive(Parser, Debug)]
+#[command[version, about, long_about = None]]
+struct Args {
+    #[arg(
+        short,
+        long,
+        default_value = cfg::default_config_path().expect("Failed to assign default config path").into_os_string(),
+        help = "Config path"
+    )]
+    config: PathBuf,
+    #[arg(short, long, help = "Enable verbose logging")]
+    verbose: bool,
+    #[arg(long, help = "Disable config auto reload")]
+    disable_autoreload: bool,
+}
 
+fn main() {
     let args = Args::parse();
+
+    if args.verbose {
+        env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
+    } else {
+        env_logger::init();
+    }
+
     if !args.config.exists() {
         error!(
-            "Problem parsing arguments: config path `{}` does not exist",
+            "Failed to load config: path `{}` does not exist",
             args.config.display()
         );
         process::exit(1);
     }
     let config_path = args.config;
-    let cloned_config_path = config_path.clone();
 
     let config = cfg::load(&config_path).expect("Failed to load config");
     let config_rw_lock = Arc::new(RwLock::new(config));
-    let cloned_config_rw_lock = config_rw_lock.clone();
 
-    let mut watcher = RecommendedWatcher::new(
-        move |res: Result<Event, Error>| match res {
-            Ok(event) => {
-                if event.kind.is_modify() {
-                    match try_to_reload_config_n_times(
-                        &cloned_config_path,
-                        &cloned_config_rw_lock,
-                        10,
-                    ) {
-                        Ok(_) => info!("Config reloaded successfully"),
-                        Err(e) => error!("{:#?}", e),
+    if !args.disable_autoreload {
+        let cloned_config_path = config_path.clone();
+        let cloned_config_rw_lock = config_rw_lock.clone();
+        let mut watcher = RecommendedWatcher::new(
+            move |res: Result<Event, Error>| match res {
+                Ok(event) => {
+                    if event.kind.is_modify() {
+                        match try_to_reload_config_n_times(
+                            &cloned_config_path,
+                            &cloned_config_rw_lock,
+                            10,
+                        ) {
+                            Ok(_) => info!("Config reloaded"),
+                            Err(e) => error!("{:#?}", e),
+                        }
                     }
                 }
-            }
-            Err(e) => error!("{:#?}", e),
-        },
-        notify::Config::default(),
-    )
-    .expect("Unable to start config hot reload");
-
-    watcher
-        .watch(
-            &config_path
-                .parent()
-                .expect("How config file cannot have a parent?"),
-            RecursiveMode::NonRecursive,
+                Err(e) => error!("{:#?}", e),
+            },
+            notify::Config::default(),
         )
-        .expect("Unable to start config hot reload");
+        .expect("Unable to start config autoreload");
 
-    run(config_rw_lock);
+        watcher
+            .watch(
+                &config_path
+                    .parent()
+                    .expect("How config file cannot have a parent?"),
+                RecursiveMode::NonRecursive,
+            )
+            .expect("Unable to start config autoreload");
+        info!("Config autoreload started");
+
+        run(config_rw_lock);
+    } else {
+        run(config_rw_lock);
+    }
 }
 
 fn try_to_reload_config_n_times(
@@ -84,6 +111,7 @@ fn try_to_reload_config_n_times(
 }
 
 fn run(config_rw_lock: Arc<RwLock<cfg::Config>>) {
+    info!("Battery-friend started");
     let mut id = None;
     loop {
         let config = config_rw_lock.read().expect("Unable to read config");
@@ -135,13 +163,6 @@ fn run(config_rw_lock: Arc<RwLock<cfg::Config>>) {
         drop(config);
         thread::sleep(duration)
     }
-}
-
-#[derive(Parser, Debug)]
-#[command[version, about, long_about = None]]
-struct Args {
-    #[arg(short, long, default_value = cfg::default_config_path().expect("Failed to assign default config path").into_os_string())]
-    config: PathBuf,
 }
 
 #[derive(Debug)]
