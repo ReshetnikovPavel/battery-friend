@@ -4,7 +4,9 @@ mod cfg;
 use clap::Parser;
 use env_logger::Env;
 use log::{error, info};
-use notify::{Error, Event, RecommendedWatcher, RecursiveMode, Watcher};
+use notify::{
+    event::ModifyKind, Error, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher,
+};
 use notify_rust::{Notification, Urgency};
 use std::{
     collections::HashMap,
@@ -66,7 +68,7 @@ fn main() {
             RecommendedWatcher::new(
                 move |res: Result<Event, Error>| match res {
                     Ok(event) => {
-                        if event.kind.is_modify() {
+                        if let EventKind::Modify(ModifyKind::Data(_)) = event.kind {
                             match try_to_reload_config_n_times(&config_path, &config_rw_lock, 10) {
                                 Ok(_) => {
                                     runner_thread.unpark();
