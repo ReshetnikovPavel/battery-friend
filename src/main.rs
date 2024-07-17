@@ -49,31 +49,39 @@ fn main() {
     }
     let config_path = args.config;
 
-    let config = cfg::load(&config_path).expect("Failed to load config");
-    let config_rw_lock = Arc::new(RwLock::new(config));
+    let config_rw_lock = Arc::new(RwLock::new(
+        cfg::load(&config_path).expect("Failed to load config"),
+    ));
 
     if !args.disable_autoreload {
-        let cloned_config_path = config_path.clone();
-        let cloned_config_rw_lock = config_rw_lock.clone();
-        let mut watcher = RecommendedWatcher::new(
-            move |res: Result<Event, Error>| match res {
-                Ok(event) => {
-                    if event.kind.is_modify() {
-                        match try_to_reload_config_n_times(
-                            &cloned_config_path,
-                            &cloned_config_rw_lock,
-                            10,
-                        ) {
-                            Ok(_) => info!("Config reloaded"),
-                            Err(e) => error!("{:#?}", e),
+        let runner = {
+            let config_rw_lock = config_rw_lock.clone();
+            thread::spawn(|| run(config_rw_lock))
+        };
+        let runner_thread = runner.thread();
+        let mut watcher = {
+            let config_path = config_path.clone();
+            let config_rw_lock = config_rw_lock.clone();
+            let runner_thread = runner_thread.clone();
+            RecommendedWatcher::new(
+                move |res: Result<Event, Error>| match res {
+                    Ok(event) => {
+                        if event.kind.is_modify() {
+                            match try_to_reload_config_n_times(&config_path, &config_rw_lock, 10) {
+                                Ok(_) => {
+                                    runner_thread.unpark();
+                                    info!("Config reloaded")
+                                }
+                                Err(e) => error!("{:#?}", e),
+                            }
                         }
                     }
-                }
-                Err(e) => error!("{:#?}", e),
-            },
-            notify::Config::default(),
-        )
-        .expect("Unable to start config autoreload");
+                    Err(e) => error!("{:#?}", e),
+                },
+                notify::Config::default(),
+            )
+            .expect("Unable to start config autoreload")
+        };
 
         watcher
             .watch(
@@ -85,7 +93,7 @@ fn main() {
             .expect("Unable to start config autoreload");
         info!("Config autoreload started");
 
-        run(config_rw_lock);
+        runner.join().expect("Runner panicked");
     } else {
         run(config_rw_lock);
     }
@@ -161,7 +169,7 @@ fn run(config_rw_lock: Arc<RwLock<cfg::Config>>) {
         }
 
         drop(config);
-        thread::sleep(duration)
+        thread::park_timeout(duration)
     }
 }
 
