@@ -1,4 +1,9 @@
-use std::{collections::HashMap, fs, io, path::PathBuf, sync::{Arc, PoisonError, RwLock, RwLockWriteGuard}};
+use std::{
+    collections::HashMap,
+    fs, io,
+    path::PathBuf,
+    sync::{Arc, PoisonError, RwLock, RwLockWriteGuard},
+};
 
 #[derive(serde::Deserialize, Debug)]
 pub struct Config {
@@ -50,10 +55,13 @@ pub fn load(path: &PathBuf) -> Result<Config, LoadError> {
 #[derive(Debug)]
 pub enum ReloadError<'a> {
     Load(LoadError),
-    Poison(PoisonError<RwLockWriteGuard<'a, Config>>)
+    Poison(PoisonError<RwLockWriteGuard<'a, Config>>),
 }
 
-pub fn reload<'a>(config_path: &PathBuf, config_rw_lock: &'a Arc<RwLock<Config>>) -> Result<(), ReloadError<'a>> {
+pub fn reload<'a>(
+    config_path: &PathBuf,
+    config_rw_lock: &'a Arc<RwLock<Config>>,
+) -> Result<(), ReloadError<'a>> {
     let config = load(&config_path).map_err(|e| ReloadError::Load(e))?;
     let mut write_lock = config_rw_lock.write().map_err(|e| ReloadError::Poison(e))?;
     *write_lock = config;

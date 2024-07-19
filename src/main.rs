@@ -122,7 +122,7 @@ fn try_to_reload_config_n_times(
 
 fn run(config_rw_lock: Arc<RwLock<cfg::Config>>) {
     info!("Battery-friend started");
-    let mut id = None;
+    let mut ids = HashMap::new();
     loop {
         let config = config_rw_lock.read().expect("Unable to read config");
         let duration = match parse_duration::parse(&config.poll) {
@@ -135,9 +135,10 @@ fn run(config_rw_lock: Arc<RwLock<cfg::Config>>) {
                 Duration::from_secs(2 * 60)
             }
         };
+
         match (battery::percentage(), battery::status()) {
             (Ok(percent), Ok(status)) => {
-                for message in filter_messages(&config.messages, percent, status) {
+                for (name, message) in filter_messages(&config.messages, percent, status) {
                     let mut notification = match build_notification(message, percent) {
                         Ok(n) => n,
                         Err(e) => {
@@ -145,8 +146,8 @@ fn run(config_rw_lock: Arc<RwLock<cfg::Config>>) {
                             continue;
                         }
                     };
-                    if let Some(id) = id {
-                        notification.id(id);
+                    if let Some(id) = ids.get(name) {
+                        notification.id(*id);
                     }
                     let handle = match notification.show() {
                         Ok(h) => h,
@@ -155,7 +156,10 @@ fn run(config_rw_lock: Arc<RwLock<cfg::Config>>) {
                             continue;
                         }
                     };
-                    id = Some(handle.id());
+
+                    if !ids.contains_key(name) {
+                        ids.insert(name.clone(), handle.id());
+                    }
                 }
             }
             (Err(ep), Err(es)) => {
@@ -170,6 +174,7 @@ fn run(config_rw_lock: Arc<RwLock<cfg::Config>>) {
             (_, Err(es)) => error!("Unable to get battery status: {:#?}", es),
         }
 
+        ids.retain(|name, _| config.messages.contains_key(name));
         drop(config);
         thread::park_timeout(duration)
     }
@@ -222,18 +227,17 @@ fn filter_messages(
     messages: &HashMap<String, cfg::Message>,
     battery_percent: i64,
     status: battery::Status,
-) -> Vec<&cfg::Message> {
+) -> Vec<(&String, &cfg::Message)> {
     messages
         .iter()
-        .map(|(_, m)| m)
-        .filter(|m| match m.status.parse::<battery::Status>() {
+        .filter(|(_, m)| match m.status.parse::<battery::Status>() {
             Ok(s) => s == status,
             Err(e) => {
                 error!("Wrong status in message {:#?}, {:#?}", m, e);
                 false
             }
         })
-        .filter(|m| {
+        .filter(|(_, m)| {
             if m.from > m.to {
                 error!("`from` cannot be greater than `to` in message {:#?}", m);
                 false
