@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    fmt::Display,
     fs, io,
     path::PathBuf,
     sync::{Arc, PoisonError, RwLock, RwLockWriteGuard},
@@ -46,6 +47,18 @@ pub enum LoadError {
     Parse(toml::de::Error),
 }
 
+impl std::error::Error for LoadError {}
+
+impl Display for LoadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let m = "Unable to load config";
+        match self {
+            LoadError::Read(e) => write!(f, "{}: {}", m, e),
+            LoadError::Parse(e) => write!(f, "{}: {}", m, e),
+        }
+    }
+}
+
 pub fn load(path: &PathBuf) -> Result<Config, LoadError> {
     let contents = fs::read_to_string(path).map_err(|e| LoadError::Read(e))?;
     let config = toml::from_str(&contents).map_err(|e| LoadError::Parse(e))?;
@@ -57,6 +70,18 @@ pub enum ReloadError<'a> {
     Load(LoadError),
     Poison(PoisonError<RwLockWriteGuard<'a, Config>>),
 }
+
+impl<'a> Display for ReloadError<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let m = "Unable to reload config";
+        match self {
+            ReloadError::Load(e) => write!(f, "{}: {}", m, e),
+            ReloadError::Poison(e) => write!(f, "{}: {}", m, e),
+        }
+    }
+}
+
+impl<'a> std::error::Error for ReloadError<'a> {}
 
 pub fn reload<'a>(
     config_path: &PathBuf,

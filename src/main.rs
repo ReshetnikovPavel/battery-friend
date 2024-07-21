@@ -10,6 +10,7 @@ use notify::{
 use notify_rust::{Notification, Urgency};
 use std::{
     collections::HashMap,
+    fmt::Display,
     path::PathBuf,
     process,
     sync::{Arc, RwLock},
@@ -23,7 +24,7 @@ struct Args {
     #[arg(
         short,
         long,
-        default_value = cfg::default_config_path().expect("Failed to assign default config path").into_os_string(),
+        default_value = cfg::default_config_path().unwrap().into_os_string(),
         help = "Config path"
     )]
     config: PathBuf,
@@ -42,63 +43,65 @@ fn main() {
         env_logger::init();
     }
 
-    if !args.config.exists() {
-        error!(
-            "Failed to load config: path `{}` does not exist",
-            args.config.display()
-        );
-        process::exit(1);
-    }
     let config_path = args.config;
-
-    let config_rw_lock = Arc::new(RwLock::new(
-        cfg::load(&config_path).expect("Failed to load config"),
-    ));
+    let config_rw_lock = Arc::new(RwLock::new(cfg::load(&config_path).unwrap_or_else(|e| {
+        error!("{}", e);
+        process::exit(1);
+    })));
 
     if !args.disable_autoreload {
-        let runner = {
-            let config_rw_lock = config_rw_lock.clone();
-            thread::spawn(|| run(config_rw_lock))
-        };
-        let runner_thread = runner.thread();
-        let mut watcher = {
-            let config_path = config_path.clone();
-            let config_rw_lock = config_rw_lock.clone();
-            let runner_thread = runner_thread.clone();
-            RecommendedWatcher::new(
-                move |res: Result<Event, Error>| match res {
-                    Ok(event) => {
-                        if let EventKind::Modify(ModifyKind::Data(_)) = event.kind {
-                            match try_to_reload_config_n_times(&config_path, &config_rw_lock, 10) {
-                                Ok(_) => {
-                                    runner_thread.unpark();
-                                    info!("Config reloaded")
-                                }
-                                Err(e) => error!("{:#?}", e),
-                            }
-                        }
-                    }
-                    Err(e) => error!("{:#?}", e),
-                },
-                notify::Config::default(),
-            )
-            .expect("Unable to start config autoreload")
-        };
-
-        watcher
-            .watch(
-                &config_path
-                    .parent()
-                    .expect("How config file cannot have a parent?"),
-                RecursiveMode::NonRecursive,
-            )
-            .expect("Unable to start config autoreload");
-        info!("Config autoreload started");
-
-        runner.join().expect("Runner panicked");
+        run_with_config_autoreload(&config_path, config_rw_lock)
     } else {
         run(config_rw_lock);
     }
+}
+
+fn run_with_config_autoreload(config_path: &PathBuf, config_rw_lock: Arc<RwLock<cfg::Config>>) {
+    let runner = {
+        let config_rw_lock = config_rw_lock.clone();
+        thread::spawn(|| run(config_rw_lock))
+    };
+    let runner_thread = runner.thread();
+    let mut watcher = {
+        let config_path = config_path.clone();
+        let config_rw_lock = config_rw_lock.clone();
+        let runner_thread = runner_thread.clone();
+        RecommendedWatcher::new(
+            move |res: Result<Event, Error>| match res {
+                Ok(event) => {
+                    if let EventKind::Modify(ModifyKind::Data(_)) = event.kind {
+                        match try_to_reload_config_n_times(&config_path, &config_rw_lock, 10) {
+                            Ok(_) => {
+                                runner_thread.unpark();
+                                info!("Config reloaded")
+                            }
+                            Err(e) => error!("{}", e),
+                        }
+                    }
+                }
+                Err(e) => error!("{}", e),
+            },
+            notify::Config::default(),
+        )
+        .unwrap_or_else(|e| {
+            error!("Unable to start config autoreload: {}", e);
+            process::exit(1)
+        })
+    };
+
+    let config_dir = config_path.parent().unwrap_or_else(|| {
+        error!("Unable to get a directory the config file is in");
+        process::exit(1)
+    });
+    watcher
+        .watch(config_dir, RecursiveMode::NonRecursive)
+        .unwrap_or_else(|e| {
+            error!("Unable to start config autoreload: {}", e);
+            process::exit(1)
+        });
+    info!("Config autoreload started");
+
+    runner.join().expect("Runner panicked");
 }
 
 fn try_to_reload_config_n_times(
@@ -113,7 +116,7 @@ fn try_to_reload_config_n_times(
             Err(cfg::ReloadError::Load(cfg::LoadError::Read(_))) => {
                 thread::sleep(Duration::from_millis(10))
             }
-            Err(e) => err.push_str(&format!("{:#?}", e)),
+            Err(e) => err.push_str(&format!("{}", e)),
         }
     }
     err.push_str("Failed to reload config");
@@ -125,16 +128,13 @@ fn run(config_rw_lock: Arc<RwLock<cfg::Config>>) {
     let mut ids = HashMap::new();
     loop {
         let config = config_rw_lock.read().expect("Unable to read config");
-        let duration = match parse_duration::parse(&config.poll) {
-            Ok(d) => d,
-            Err(e) => {
-                error!(
-                    "Unable to parse poll duration, fallback to default 2 minutes: {:#?}",
-                    e
-                );
-                Duration::from_secs(2 * 60)
-            }
-        };
+        let duration = parse_duration::parse(&config.poll).unwrap_or_else(|e| {
+            error!(
+                "Unable to parse poll duration, fallback to default 2 minutes: {}",
+                e
+            );
+            Duration::from_secs(2 * 60)
+        });
 
         match (battery::percentage(), battery::status()) {
             (Ok(percent), Ok(status)) => {
@@ -142,7 +142,7 @@ fn run(config_rw_lock: Arc<RwLock<cfg::Config>>) {
                     let mut notification = match build_notification(message, percent) {
                         Ok(n) => n,
                         Err(e) => {
-                            error!("Unable to build a notification: {:#?}", e);
+                            error!("Unable to build a notification: {}", e);
                             continue;
                         }
                     };
@@ -152,7 +152,7 @@ fn run(config_rw_lock: Arc<RwLock<cfg::Config>>) {
                     let handle = match notification.show() {
                         Ok(h) => h,
                         Err(e) => {
-                            error!("Unable to show a notification: {:#?}", e);
+                            error!("Unable to show a notification: {}", e);
                             continue;
                         }
                     };
@@ -164,14 +164,14 @@ fn run(config_rw_lock: Arc<RwLock<cfg::Config>>) {
             }
             (Err(ep), Err(es)) => {
                 error!(
-                    "Unable to get battery percentage and battery status: {:#?} {:#?}",
+                    "Unable to get battery percentage and battery status: {} {}",
                     ep, es
                 )
             }
             (Err(ep), _) => {
-                error!("Unable to get battery percentage: {:#?}", ep)
+                error!("Unable to get battery percentage: {}", ep)
             }
-            (_, Err(es)) => error!("Unable to get battery status: {:#?}", es),
+            (_, Err(es)) => error!("Unable to get battery status: {}", es),
         }
 
         ids.retain(|name, _| config.messages.contains_key(name));
@@ -184,6 +184,17 @@ fn run(config_rw_lock: Arc<RwLock<cfg::Config>>) {
 enum BuildNotificationError {
     ParseUrgency(ParseUrgencyError),
 }
+
+impl Display for BuildNotificationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let m = "Unable to build notification";
+        match self {
+            BuildNotificationError::ParseUrgency(e) => write!(f, "{}: {}", m, e),
+        }
+    }
+}
+
+impl std::error::Error for BuildNotificationError {}
 
 fn build_notification(
     message: &cfg::Message,
@@ -212,14 +223,28 @@ fn format(string: &str, percent: i64) -> String {
 }
 
 #[derive(Debug)]
-struct ParseUrgencyError {}
+struct ParseUrgencyError {
+    s: String,
+}
+
+impl Display for ParseUrgencyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Error parsing notification urgency. Unknown urgency `{}`",
+            self.s
+        )
+    }
+}
 
 fn parse_urgency(urgency: &str) -> Result<Urgency, ParseUrgencyError> {
     match urgency {
         "low" | "Low" => Ok(Urgency::Low),
         "normal" | "Normal" => Ok(Urgency::Normal),
         "critical" | "Critical" => Ok(Urgency::Critical),
-        _ => Err(ParseUrgencyError {}),
+        _ => Err(ParseUrgencyError {
+            s: urgency.to_owned(),
+        }),
     }
 }
 
@@ -233,7 +258,7 @@ fn filter_messages(
         .filter(|(_, m)| match m.status.parse::<battery::Status>() {
             Ok(s) => s == status,
             Err(e) => {
-                error!("Wrong status in message {:#?}, {:#?}", m, e);
+                error!("Wrong status in message {:#?}, {}", m, e);
                 false
             }
         })
