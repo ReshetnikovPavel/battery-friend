@@ -113,9 +113,10 @@ fn try_to_reload_config_n_times(
     for _ in 0..n {
         match cfg::reload(config_path, config_rw_lock) {
             Ok(_) => return Ok(()),
-            Err(cfg::ReloadError::Load(cfg::LoadError::Read(_))) => {
-                thread::sleep(Duration::from_millis(10))
-            }
+            Err(cfg::ReloadError::Load(cfg::LoadError {
+                kind: cfg::LoadErrorKind::Read(_),
+                ..
+            })) => thread::sleep(Duration::from_millis(10)),
             Err(e) => err.push_str(&format!("{}", e)),
         }
     }

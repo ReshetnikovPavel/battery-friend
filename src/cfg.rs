@@ -42,26 +42,38 @@ pub fn default_config_path() -> Option<PathBuf> {
 }
 
 #[derive(Debug)]
-pub enum LoadError {
+pub enum LoadErrorKind {
     Read(io::Error),
     Parse(toml::de::Error),
+}
+
+#[derive(Debug)]
+pub struct LoadError {
+    pub kind: LoadErrorKind,
+    path: PathBuf,
 }
 
 impl std::error::Error for LoadError {}
 
 impl Display for LoadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let m = "Unable to load config";
-        match self {
-            LoadError::Read(e) => write!(f, "{}: {}", m, e),
-            LoadError::Parse(e) => write!(f, "{}: {}", m, e),
+        let m = format!("Unable to load config {}", self.path.display());
+        match &self.kind {
+            LoadErrorKind::Read(e) => write!(f, "{}: {}", m, e),
+            LoadErrorKind::Parse(e) => write!(f, "{}: {}", m, e),
         }
     }
 }
 
 pub fn load(path: &PathBuf) -> Result<Config, LoadError> {
-    let contents = fs::read_to_string(path).map_err(|e| LoadError::Read(e))?;
-    let config = toml::from_str(&contents).map_err(|e| LoadError::Parse(e))?;
+    let contents = fs::read_to_string(path).map_err(|e| LoadError {
+        kind: LoadErrorKind::Read(e),
+        path: path.to_owned(),
+    })?;
+    let config = toml::from_str(&contents).map_err(|e| LoadError {
+        kind: LoadErrorKind::Parse(e),
+        path: path.to_owned(),
+    })?;
     Ok(config)
 }
 
